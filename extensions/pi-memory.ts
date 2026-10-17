@@ -66,7 +66,7 @@ export default function piMemory(pi: ExtensionAPI) {
 
 	pi.on("before_agent_start", async (event, ctx) => {
 		project = await projectOf(ctx.cwd);
-		if (!continued) prompt = event.prompt;
+		if (event.messageType === "user" && !continued) prompt = event.prompt;
 		const card = await python("memcard.py", ["--project", project]);
 		event.systemPromptOptions.sections.pi_memory = [
 			`Cross-session memory (pi-memory) at ${ROOT}; current project: ${project || "none"}.`,
