@@ -1,0 +1,17 @@
+{
+  "name": "pi-memory",
+  "private": true,
+  "description": "Cross-session persistent memory for Pi — Markdown-based, git-versioned, Python 3 stdlib only",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/pi-memory.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "license": "MIT"
+}
