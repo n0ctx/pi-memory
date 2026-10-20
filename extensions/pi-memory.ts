@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { deferredWork, followUp, lastingPreference, machineCommand, machineFile, projectFile } from "./detect.ts";
+import { machineCommand, machineFile, machineReminder, promptReminder, saveErrorReminder } from "./detect.ts";
 
 const SCRIPTS = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "scripts");
 const PYTHON = process.platform === "win32" ? ["py", "-3"] : ["python3"];
@@ -43,19 +43,11 @@ export default function piMemory(pi: ExtensionAPI) {
 	if ((process.env.PI_SUBAGENT_DEPTH ?? "0") !== "0") return;
 
 	let project = "";
-	let prompt = "";
-	let recorded = false;
 	let continued = false;
-	let machineChanges: string[] = [];
-	let projectChanged = false;
-	let reportTouched = false;
+	let machineReminded = false;
 	const resetRun = () => {
-		prompt = "";
-		recorded = false;
 		continued = false;
-		machineChanges = [];
-		projectChanged = false;
-		reportTouched = false;
+		machineReminded = false;
 	};
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -66,7 +58,6 @@ export default function piMemory(pi: ExtensionAPI) {
 
 	pi.on("before_agent_start", async (event, ctx) => {
 		project = await projectOf(ctx.cwd);
-		if (event.messageType === "user" && !continued) prompt = event.prompt;
 		const card = await python("memcard.py", ["--project", project]);
 		event.systemPromptOptions.sections.pi_memory = [
 			`Cross-session memory (pi-memory) at ${ROOT}; current project: ${project || "none"}.`,
@@ -74,9 +65,13 @@ export default function piMemory(pi: ExtensionAPI) {
 			"",
 			card.code === 0 ? card.out.trim() : `(memory card unavailable: ${card.out.trim()})`,
 		].join("\n");
+		const reminder = event.messageType === "user" ? promptReminder(event.prompt) : undefined;
+		if (reminder) return { message: { customType: "pi-memory", content: reminder, display: false } };
 	});
 
-	pi.on("tool_call", (event, ctx) => {
+	// Reminders go out before the final reply so recording never needs an extra turn.
+	pi.on("tool_result", (event, ctx) => {
+		if (machineReminded || event.isError) return;
 		const input = event.input as { command?: string; path?: string };
 		const change =
 			event.toolName === "bash" && input.command
@@ -84,43 +79,29 @@ export default function piMemory(pi: ExtensionAPI) {
 				: (event.toolName === "edit" || event.toolName === "write") && input.path
 					? machineFile(input.path, ctx.cwd, HOME, ROOT)
 					: undefined;
-		if (change) machineChanges.push(change);
-		if ((event.toolName === "edit" || event.toolName === "write") && input.path) {
-			projectChanged ||= projectFile(input.path, ctx.cwd, HOME, ROOT);
-		}
+		if (!change) return;
+		machineReminded = true;
+		return { content: [...event.content, { type: "text", text: machineReminder(change) }], structuredContent: event.structuredContent };
 	});
 
 	pi.on("agent_before_settle", async (event, ctx) => {
 		const saved = await python("memsave.py", ["--project", project]);
-		let result = { changed: [] as string[], errors: [] as string[] };
+		let errors: string[] = [];
 		try {
-			result = JSON.parse(saved.out);
+			errors = JSON.parse(saved.out).errors;
 		} catch {
-			result.errors = [saved.out.trim() || `memsave exited with ${saved.code}`];
+			errors = [saved.out.trim() || `memsave exited with ${saved.code}`];
 		}
-		recorded ||= result.changed.length > 0;
-		// Reports are the .md files at the top of the root; INDEX.md is generated.
-		reportTouched ||= result.changed.some((f) => !f.includes("/") && f.endsWith(".md") && f !== "INDEX.md");
-		const message = followUp({
-			saveErrors: result.errors,
-			recorded,
-			machineChanges,
-			preference: lastingPreference(prompt),
-			projectChanged,
-			reportTouched,
-			deferral: deferredWork(prompt),
-		});
+		if (!errors.length) return;
 		// Pi validates the continuation after the entry is appended; event.context predates it.
-		if (message && !continued && event.outcome === "completed") {
+		if (!continued && event.outcome === "completed") {
 			continued = true;
 			return {
-				entries: [{ type: "custom_message", customType: "pi-memory", content: message, display: false }],
+				entries: [{ type: "custom_message", customType: "pi-memory", content: saveErrorReminder(errors), display: false }],
 				continue: true,
 			};
 		}
-		if (result.errors.length && ctx.hasUI) {
-			ctx.ui.notify(`pi-memory: memory changes not saved — ${result.errors[0]}`, "warning");
-		}
+		if (ctx.hasUI) ctx.ui.notify(`pi-memory: memory changes not saved — ${errors[0]}`, "warning");
 	});
 
 	pi.on("agent_settled", resetRun);
@@ -168,7 +149,6 @@ export default function piMemory(pi: ExtensionAPI) {
 			} else {
 				const { action: _, ...data } = params;
 				res = await python("memwrite.py", [action, "--project", project, "--json", JSON.stringify(data)], signal);
-				if (res.code === 0) recorded = true;
 			}
 			if (res.code !== 0) throw new Error(res.out.trim());
 			const text = res.out.length > 8000 ? `${res.out.slice(0, 8000)}\n… (truncated; refine the query)` : res.out;

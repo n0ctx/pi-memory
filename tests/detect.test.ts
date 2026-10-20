@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import * as path from "node:path";
 import { test } from "node:test";
-import { deferredWork, followUp, lastingPreference, machineCommand, machineFile, projectFile } from "../extensions/detect.ts";
+import { deferredWork, lastingPreference, machineCommand, machineFile, machineReminder, promptReminder, saveErrorReminder } from "../extensions/detect.ts";
 
 test("machine commands are detected, project commands are not", () => {
 	for (const cmd of ["brew install ripgrep", "npm i -g pnpm", "npm install --save-dev x --global", "pi install ./pkg",
@@ -47,21 +47,6 @@ test("lasting preference wording is quoted", () => {
 	assert.equal(lastingPreference("给 calc.py 加一个 sub 函数"), undefined);
 });
 
-const quiet = { saveErrors: [], recorded: false, machineChanges: [], projectChanged: false, reportTouched: false };
-
-test("follow-up asks once for everything outstanding and stays silent otherwise", () => {
-	assert.equal(followUp({ ...quiet }), undefined);
-	assert.equal(followUp({ ...quiet, recorded: true, machineChanges: ["brew install x"], preference: "以后" }), undefined);
-	const both = followUp({ ...quiet, machineChanges: ["brew install x", "brew install x"], preference: "以后别用表格" }) ?? "";
-	assert.match(both, /kind "environment"/);
-	assert.match(both, /kind "preference"/);
-	assert.match(both, /end without replying/);
-	assert.equal(both.match(/brew install x/g)?.length, 1);
-	const errors = followUp({ ...quiet, saveErrors: ["a.md: Missing required field summary"], recorded: true }) ?? "";
-	assert.match(errors, /Missing required field summary/);
-	assert.doesNotMatch(errors, /end without replying/);
-});
-
 test("deferred work wording is quoted; plain requests are not", () => {
 	for (const prompt of ["给 calc.py 加 sub，mul 和 div 以后再说", "今天只先做 sub，剩下的明天做", "Do the parser for now, the rest next time"]) {
 		assert.ok(deferredWork(prompt), prompt);
@@ -71,19 +56,18 @@ test("deferred work wording is quoted; plain requests are not", () => {
 	}
 });
 
-test("project files are inside the working directory and outside the memory root", () => {
-	assert.equal(projectFile("calc.py", "/w/proj", "/w", "/w/reports", path.posix), true);
-	assert.equal(projectFile("/w/proj/src/a.ts", "/w/proj", "/w", "/w/reports", path.posix), true);
-	assert.equal(projectFile("/w/other/a.ts", "/w/proj", "/w", "/w/reports", path.posix), false);
-	assert.equal(projectFile("/w/reports/x.md", "/w", "/w", "/w/reports", path.posix), false);
-	assert.equal(projectFile("c:/w/proj/a.ts", "C:\\W\\proj", "C:\\W", "D:\\Reports", path.win32), true);
+test("prompt reminder covers preference and deferral wording and stays silent otherwise", () => {
+	assert.equal(promptReminder("给 calc.py 加一个 sub 函数"), undefined);
+	assert.match(promptReminder("以后回复别用表格") ?? "", /kind "preference"/);
+	const deferred = promptReminder("今天只先做 sub，剩下的明天做") ?? "";
+	assert.match(deferred, /status "partial"/);
+	assert.doesNotMatch(deferred, /kind "preference"/);
+	const both = promptReminder("以后都先跑测试，剩下的明天做") ?? "";
+	assert.match(both, /kind "preference"/);
+	assert.match(both, /status "partial"/);
 });
 
-test("handoff reminder needs project edits, deferral wording, and no report change", () => {
-	const deferred = { ...quiet, projectChanged: true, deferral: "剩下的明天做" };
-	assert.match(followUp(deferred) ?? "", /status "partial"/);
-	assert.equal(followUp({ ...deferred, reportTouched: true }), undefined);
-	assert.equal(followUp({ ...deferred, projectChanged: false }), undefined);
-	assert.equal(followUp({ ...deferred, deferral: undefined }), undefined);
-	assert.match(followUp({ ...deferred, recorded: true }) ?? "", /status "partial"/);
+test("machine and save-error reminders quote what happened", () => {
+	assert.match(machineReminder("brew install x"), /\(brew install x\).*kind "environment"/);
+	assert.match(saveErrorReminder(["a.md: Missing required field summary"]), /- a\.md: Missing required field summary/);
 });

@@ -45,12 +45,6 @@ export function machineFile(
 	return config ? `~/${rel}` : undefined;
 }
 
-/** A file inside the project directory and outside the memory root. */
-export function projectFile(file: string, cwd: string, home: string, memoryRoot: string, p: path.PlatformPath = path): boolean {
-	const abs = resolve(file, cwd, home, p);
-	return within(abs, cwd, p) && !within(abs, memoryRoot, p);
-}
-
 function quote(rx: RegExp, prompt: string): string | undefined {
 	const m = rx.exec(prompt);
 	if (!m) return undefined;
@@ -68,48 +62,40 @@ export function deferredWork(prompt: string): string | undefined {
 	return quote(DEFERRAL, prompt);
 }
 
-export interface RunFindings {
-	saveErrors: string[];
-	recorded: boolean;
-	machineChanges: string[];
-	preference?: string;
-	/** Project files were edited or written this run. */
-	projectChanged: boolean;
-	/** A report was created or changed this run. */
-	reportTouched: boolean;
-	deferral?: string;
+/** Hidden note for the start of a run whose prompt may need recording, or undefined. */
+export function promptReminder(prompt: string): string | undefined {
+	const parts: string[] = [];
+	const preference = lastingPreference(prompt);
+	if (preference) {
+		parts.push(
+			`pi-memory: the user's message may state a lasting preference or correction ("${preference}"). ` +
+				'If it does, record it with the memory tool (action "note", kind "preference") in the user\'s words before your final reply.',
+		);
+	}
+	const deferral = deferredWork(prompt);
+	if (deferral) {
+		parts.push(
+			`pi-memory: the user's message leaves part of the work for later ("${deferral}"). ` +
+				"If work remains when you finish, record a handoff with the memory tool before your final reply: " +
+				'update the open report on the memory card if there is one, otherwise action "report" with status "partial" and the remaining items in open.',
+		);
+	}
+	return parts.length ? parts.join("\n\n") : undefined;
 }
 
-/** The single follow-up message for the agent at the end of a run, or undefined when nothing is needed. */
-export function followUp(f: RunFindings): string | undefined {
-	const parts: string[] = [];
-	if (f.saveErrors.length) {
-		parts.push(
-			"pi-memory could not save memory changes:\n" +
-				f.saveErrors.map((e) => `- ${e}`).join("\n") +
-				"\nFix these files (edit them or use the memory tool); they are committed automatically once valid.",
-		);
-	}
-	if (!f.recorded && f.machineChanges.length) {
-		parts.push(
-			`pi-memory: this run changed machine configuration (${[...new Set(f.machineChanges)].slice(0, 3).join("; ")}) and nothing was recorded. ` +
-				'If the change outlasts this task, record it with the memory tool (action "note", kind "environment"), giving old and new values.',
-		);
-	}
-	if (!f.recorded && f.preference) {
-		parts.push(
-			`pi-memory: the user's message may state a lasting preference or correction ("${f.preference}"). ` +
-				'If it does, record it with the memory tool (action "note", kind "preference") in the user\'s words.',
-		);
-	}
-	if (f.projectChanged && !f.reportTouched && f.deferral) {
-		parts.push(
-			`pi-memory: the user's message leaves part of the work for later ("${f.deferral}") and no report was created or updated. ` +
-				'If work remains, record a handoff with the memory tool: update the open report on the memory card if there is one, ' +
-				'otherwise action "report" with status "partial" and the remaining items in open.',
-		);
-	}
-	if (!parts.length) return undefined;
-	if (!f.saveErrors.length) parts.push("If nothing needs recording, end without replying.");
-	return parts.join("\n\n");
+/** Note appended to the result of a tool call that changed machine configuration. */
+export function machineReminder(change: string): string {
+	return (
+		`pi-memory: this changed machine configuration (${change}). ` +
+		'If the change outlasts this task, record it with the memory tool (action "note", kind "environment") before your final reply, giving old and new values.'
+	);
+}
+
+/** Follow-up for a run whose memory changes could not be saved. */
+export function saveErrorReminder(errors: string[]): string {
+	return (
+		"pi-memory could not save memory changes:\n" +
+		errors.map((e) => `- ${e}`).join("\n") +
+		"\nFix these files (edit them or use the memory tool); they are committed automatically once valid."
+	);
 }
